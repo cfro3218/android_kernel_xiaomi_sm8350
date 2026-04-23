@@ -54,7 +54,7 @@ jobs:
             STRIP=llvm-strip
 
       - name: Upload Kernel Image
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Renoir-Kernel-Image
           path: out/arch/arm64/boot/Image
