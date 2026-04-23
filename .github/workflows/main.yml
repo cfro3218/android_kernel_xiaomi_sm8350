@@ -1,0 +1,60 @@
+name: Build Renoir Kernel
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v3
+        with:
+          ref: sixteen-qpr1 # 锁定你的分支
+
+      - name: Setup Build Env
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm curl python3
+
+      - name: Download Clang
+        run: |
+          mkdir clang
+          # 使用 AOSP 官方 Clang r416183b
+          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b.tar.gz
+          tar -xf clang-r416183b.tar.gz -C clang
+
+      - name: Build Kernel
+        run: |
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          export ARCH=arm64
+          export SUBARCH=arm64
+          OUT=out
+          
+          # 1. 生成基础配置
+          make O=$OUT gki_defconfig
+          
+          # 2. 合并 Renoir 专用配置 (根据你截图的路径)
+          # 注意：这里假设配置文件在 arch/arm64/configs/ 下
+          ARCH=arm64 ./scripts/kconfig/merge_config.sh -O $OUT $OUT/.config arch/arm64/configs/renoir_QGKI.config
+          
+          # 3. 强制开启你需要的 RNDIS 驱动
+          echo "CONFIG_USB_NET_RNDIS_HOST=y" >> $OUT/.config
+          echo "CONFIG_USB_NET_RNDIS_WLAN=y" >> $OUT/.config
+          echo "CONFIG_USB_NET_CDC_ETHER=y" >> $OUT/.config
+          
+          # 4. 执行编译
+          make -j$(nproc) O=$OUT \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            LD=ld.lld \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip
+
+      - name: Upload Kernel Image
+        uses: actions/upload-artifact@v3
+        with:
+          name: Renoir-Kernel-Image
+          path: out/arch/arm64/boot/Image
