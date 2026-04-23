@@ -1,39 +1,50 @@
-name: 生成我的RNDIS内核
+name: Build Kernel
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 手动点击运行
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出源码
-        uses: actions/checkout@v4
+      - name: Checkout Source
+        uses: actions/checkout@v3
 
-      - name: 安装交叉编译工具链
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm crossbuild-essential-arm64
+          sudo apt-get install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm
 
-      - name: 注入配置并编译
+      - name: Download Clang
         run: |
-          mkdir out
-          
-          # 1. 定义准确的文件名（修正了连字符）
-          BASE_CONF="vendor/lahaina-qgki_defconfig"
-          RENOIR_CONF="vendor/renoir_QGKI.config"
-          
-          # 2. 强行注入 RNDIS 驱动开关到底座配置中
-          echo "CONFIG_USB_NET_DRIVERS=y" >> arch/arm64/configs/$BASE_CONF
-          echo "CONFIG_USB_NET_RNDIS=y" >> arch/arm64/configs/$BASE_CONF
-          echo "CONFIG_USB_NET_CDC_ETHER=y" >> arch/arm64/configs/$BASE_CONF
-          echo "CONFIG_USB_NET_CDC_NCM=y" >> arch/arm64/configs/$BASE_CONF
+          mkdir clang
+          cd clang
+          # 下载 AOSP Clang (骁龙 888 推荐使用 r416183b 或更高)
+          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b.tar.gz
+          tar -xf clang-r416183b.tar.gz
 
-          # 3. 混合生成最终配置
-          make O=out ARCH=arm64 $BASE_CONF $RENOIR_CONF
+      - name: Build Kernel
+        run: |
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          export ARCH=arm64
+          export SUBARCH=arm64
+          # 注意：这里的 alioth_defconfig 需要换成你 arch/arm64/configs/ 下对应的文件名
+          make O=out vendor/alioth_defconfig
           
-          # 4. 自动补全默认选项
-          make O=out ARCH=arm64 olddefconfig
+          # 这一步会修改配置开启 RNDIS
+          scripts/config --file out/.config --enable CONFIG_USB_NET_RNDIS_HOST
+          scripts/config --file out/.config --enable CONFIG_USB_NET_RNDIS_WLAN
+          
+          make -j$(nproc) O=out \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            LD=ld.lld
 
+      - name: Upload Kernel Image
+        uses: actions/upload-artifact@v3
+        with:
+          name: Kernel-Image
+          path: out/arch/arm64/boot/Image
           # 5. 开始正式编译（这一步最耗时）
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 -j$(nproc)
 
