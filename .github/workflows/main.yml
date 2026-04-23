@@ -1,4 +1,4 @@
-name: Build Renoir Kernel
+name: Build Renoir BootImg
 on:
   workflow_dispatch:
 
@@ -7,19 +7,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          ref: sixteen-qpr1 # 锁定你的分支
+          ref: sixteen-qpr1
 
-      - name: Setup Build Env
+      - name: Setup Env
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm curl python3
+          sudo apt-get install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm curl python3 mkbootimg
 
       - name: Download Clang
         run: |
           mkdir clang
-          # 使用 AOSP 官方 Clang r416183b
           curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b.tar.gz
           tar -xf clang-r416183b.tar.gz -C clang
 
@@ -27,13 +26,32 @@ jobs:
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           export ARCH=arm64
-          export SUBARCH=arm64
           OUT=out
           
-          # 1. 生成基础配置
-          make O=$OUT gki_defconfig
+          # 针对 Renoir 的路径和配置
+          make O=$OUT vendor/renoir_QGKI.config
           
-          # 2. 合并 Renoir 专用配置 (根据你截图的路径)
+          # 强制开启 RNDIS 驱动
+          echo "CONFIG_USB_NET_RNDIS_HOST=y" >> $OUT/.config
+          echo "CONFIG_USB_NET_RNDIS_WLAN=y" >> $OUT/.config
+          
+          make -j$(nproc) O=$OUT \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            LD=ld.lld
+
+      - name: Pack Boot.img
+        run: |
+          # 这一步需要一个底包，你可以先生成 Image，手动打包更稳。
+          # 或者如果你有底包的 URL，可以在这里用 wget 下载并用 mkbootimg 替换。
+          echo "内核编译完成，Image 位于 out/arch/arm64/boot/Image"
+
+      - name: Upload Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Renoir-Image-Only
+          path: out/arch/arm64/boot/Image
           # 注意：这里假设配置文件在 arch/arm64/configs/ 下
           ARCH=arm64 ./scripts/kconfig/merge_config.sh -O $OUT $OUT/.config arch/arm64/configs/renoir_QGKI.config
           
