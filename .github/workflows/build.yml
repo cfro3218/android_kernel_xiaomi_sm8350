@@ -6,22 +6,47 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: 安装工具
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 安装交叉编译环境
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm crossbuild-essential-arm64
 
-      - name: 编译内核
+      - name: 自动化寻找路径并编译
         run: |
           mkdir out
-          # 合并底座配置和你的 Renoir 配置
-          make O=out ARCH=arm64 vendor/lahaina_qgki_defconfig vendor/renoir_QGKI.config
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 -j$(nproc)
           
-      - name: 只要 Image
+          # 1. 动态寻找配置文件，解决文件夹路径不对的问题
+          BASE_CONF=$(find arch/arm64/configs -name "lahaina_qgki_defconfig" | sed 's|arch/arm64/configs/||')
+          DEVICE_CONF=$(find arch/arm64/configs -name "renoir_QGKI.config" | sed 's|arch/arm64/configs/||')
+          
+          if [ -z "$BASE_CONF" ]; then
+            echo "错误：找不到基础配置文件 lahaina_qgki_defconfig"
+            exit 1
+          fi
+          
+          echo "检测到基础配置: $BASE_CONF"
+          echo "检测到机型配置: $DEVICE_CONF"
+
+          # 2. 合并配置并应用
+          # 如果 DEVICE_CONF 存在就合并，不存在就只用底座
+          make O=out ARCH=arm64 $BASE_CONF $DEVICE_CONF
+          
+          # 3. 核心：强制开启 RNDIS 驱动（防止配置文件里没写进去）
+          echo "CONFIG_USB_NET_DRIVERS=y" >> out/.config
+          echo "CONFIG_USB_NET_RNDIS=y" >> out/.config
+          echo "CONFIG_USB_NET_CDC_ETHER=y" >> out/.config
+          
+          # 4. 自动处理新配置项并核对
+          make O=out ARCH=arm64 olddefconfig
+          
+          # 5. 正式编译内核
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 -j$(nproc)
+
+      - name: 提取 Image 成品
         uses: actions/upload-artifact@v4
         with:
-          name: Renoir-Kernel
+          name: Renoir-Kernel-Image
           path: out/arch/arm64/boot/Image
