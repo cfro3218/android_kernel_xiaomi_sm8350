@@ -9,31 +9,39 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
-      - name: 安装交叉编译环境
+      - name: 安装交叉编译工具链
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm crossbuild-essential-arm64
 
-      - name: 自动化寻找路径并编译
+      - name: 注入配置并编译
         run: |
           mkdir out
           
-          # 1. 动态寻找配置文件，解决文件夹路径不对的问题
-          BASE_CONF=$(find arch/arm64/configs -name "lahaina_qgki_defconfig" | sed 's|arch/arm64/configs/||')
-          DEVICE_CONF=$(find arch/arm64/configs -name "renoir_QGKI.config" | sed 's|arch/arm64/configs/||')
+          # 1. 定义准确的文件名（修正了连字符）
+          BASE_CONF="vendor/lahaina-qgki_defconfig"
+          RENOIR_CONF="vendor/renoir_QGKI.config"
           
-          if [ -z "$BASE_CONF" ]; then
-            echo "错误：找不到基础配置文件 lahaina_qgki_defconfig"
-            exit 1
-          fi
-          
-          echo "检测到基础配置: $BASE_CONF"
-          echo "检测到机型配置: $DEVICE_CONF"
+          # 2. 强行注入 RNDIS 驱动开关到底座配置中
+          echo "CONFIG_USB_NET_DRIVERS=y" >> arch/arm64/configs/$BASE_CONF
+          echo "CONFIG_USB_NET_RNDIS=y" >> arch/arm64/configs/$BASE_CONF
+          echo "CONFIG_USB_NET_CDC_ETHER=y" >> arch/arm64/configs/$BASE_CONF
+          echo "CONFIG_USB_NET_CDC_NCM=y" >> arch/arm64/configs/$BASE_CONF
 
-          # 2. 合并配置并应用
-          # 如果 DEVICE_CONF 存在就合并，不存在就只用底座
-          make O=out ARCH=arm64 $BASE_CONF $DEVICE_CONF
+          # 3. 混合生成最终配置
+          make O=out ARCH=arm64 $BASE_CONF $RENOIR_CONF
           
+          # 4. 自动补全默认选项
+          make O=out ARCH=arm64 olddefconfig
+
+          # 5. 开始正式编译（这一步最耗时）
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 -j$(nproc)
+
+      - name: 上传内核成品
+        uses: actions/upload-artifact@v4
+        with:
+          name: Renoir-Kernel-Image
+          path: out/arch/arm64/boot/Image
           # 3. 核心：强制开启 RNDIS 驱动（防止配置文件里没写进去）
           echo "CONFIG_USB_NET_DRIVERS=y" >> out/.config
           echo "CONFIG_USB_NET_RNDIS=y" >> out/.config
